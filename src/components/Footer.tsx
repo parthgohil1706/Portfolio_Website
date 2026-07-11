@@ -13,8 +13,7 @@ const quickLinks = [
 
 const services = [
   "Web Development",
-  "Mobile Development",
-  "UI/UX Design",
+  "Frontend Development",
   "Backend Development",
 ];
 
