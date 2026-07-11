@@ -2,8 +2,11 @@
 
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Float, Stars } from "@react-three/drei";
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useEffect } from "react";
 import * as THREE from "three";
+
+// File-scoped scroll tracker to avoid main thread layout thrashing
+let globalScrollY = 0;
 
 /* Floating purple particles with cursor drift */
 function PurpleParticles({ count = 120 }) {
@@ -53,9 +56,10 @@ function FloatingGeo() {
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
     if (ref.current) {
-      ref.current.rotation.x = t * 0.1;
-      ref.current.rotation.y = t * 0.15;
-      ref.current.position.y = Math.sin(t * 0.3) * 0.3;
+      // Rotate faster and float down as you scroll down
+      ref.current.rotation.x = t * 0.1 + globalScrollY * 0.0025;
+      ref.current.rotation.y = t * 0.15 + globalScrollY * 0.0015;
+      ref.current.position.y = Math.sin(t * 0.3) * 0.3 - globalScrollY * 0.0025;
       // Mild rotation drift toward cursor
       ref.current.rotation.z = THREE.MathUtils.lerp(ref.current.rotation.z, state.pointer.x * 0.3, 0.05);
     }
@@ -114,43 +118,39 @@ function InteractiveArrows() {
   );
 }
 
-/* Interactive connection lines that stretch and connect directly to the user's cursor */
+/* Floating connection lines (optimized, zero lag) */
 function ConnectionLines() {
-  const lineRefs = useRef<(any | null)[]>([]);
+  const ref = useRef<THREE.Group>(null);
   
-  // Starting nodes for the lines
-  const starts = useMemo(() => {
-    const temp: THREE.Vector3[] = [];
+  const points = useMemo(() => {
+    const lines: THREE.Vector3[][] = [];
     for (let i = 0; i < 8; i++) {
-      temp.push(new THREE.Vector3(
+      const start = new THREE.Vector3(
         (Math.random() - 0.5) * 16,
         (Math.random() - 0.5) * 10,
         (Math.random() - 0.5) * 6 - 2
-      ));
+      );
+      const end = new THREE.Vector3(
+        start.x + (Math.random() - 0.5) * 4,
+        start.y + (Math.random() - 0.5) * 3,
+        start.z + (Math.random() - 0.5) * 3
+      );
+      lines.push([start, end]);
     }
-    return temp;
+    return lines;
   }, []);
 
   useFrame((state) => {
-    // Project mouse coordinates to 3D space
-    const mouseX = state.pointer.x * 8;
-    const mouseY = state.pointer.y * 5;
-    const target = new THREE.Vector3(mouseX, mouseY, 0);
-
-    starts.forEach((start, i) => {
-      const geometry = lineRefs.current[i];
-      if (geometry) {
-        // Set lines between static start point and current mouse target
-        geometry.setFromPoints([start, target]);
-      }
-    });
+    if (ref.current) {
+      ref.current.rotation.y = state.clock.getElapsedTime() * 0.02;
+    }
   });
 
   return (
-    <group>
-      {starts.map((_, i) => (
+    <group ref={ref}>
+      {points.map((pair, i) => (
         <line key={i}>
-          <bufferGeometry ref={(el) => { lineRefs.current[i] = el; }} />
+          <bufferGeometry {...new THREE.BufferGeometry().setFromPoints(pair)} />
           <lineBasicMaterial color="#a78bfa" transparent opacity={0.12} blending={THREE.AdditiveBlending} />
         </line>
       ))}
@@ -158,16 +158,22 @@ function ConnectionLines() {
   );
 }
 
-/* Camera rig to handle smooth mouse parallax */
+/* Camera rig to handle smooth mouse parallax and scroll-driven depth flights */
 function CameraRig() {
   useFrame((state) => {
-    // Increased target camera bounds for a more visible depth shift
+    // Smoothly blend mouse coordinates with scroll height coordinates
     const targetX = (state.pointer.x * 2.2);
-    const targetY = (state.pointer.y * 1.5);
+    // Camera descends through the stars as you scroll, creating a flying depth effect
+    const targetY = (state.pointer.y * 1.5) - (globalScrollY * 0.0035);
+    // Camera zooms out slightly as you scroll down
+    const targetZ = 7 + (globalScrollY * 0.0015);
     
     state.camera.position.x = THREE.MathUtils.lerp(state.camera.position.x, targetX, 0.05);
     state.camera.position.y = THREE.MathUtils.lerp(state.camera.position.y, targetY + 0.5, 0.05);
-    state.camera.lookAt(0, 0, 0);
+    state.camera.position.z = THREE.MathUtils.lerp(state.camera.position.z, targetZ, 0.05);
+    
+    // Look point sinks relative to scroll to maintain a centered look
+    state.camera.lookAt(0, -globalScrollY * 0.002, 0);
   });
   return null;
 }
@@ -200,9 +206,17 @@ function MouseLight() {
 }
 
 export default function Workspace3D() {
+  useEffect(() => {
+    const handleScroll = () => {
+      globalScrollY = window.scrollY;
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   return (
     <div className="fixed inset-0 z-0 w-full h-full pointer-events-none">
-      <Canvas camera={{ position: [0, 0, 7], fov: 60 }} dpr={[1, 1.5]}>
+      <Canvas camera={{ position: [0, 0, 7], fov: 60 }} dpr={[1, 1.15]}>
         <color attach="background" args={["#0a0118"]} />
         <fog attach="fog" args={["#0a0118", 8, 20]} />
 
